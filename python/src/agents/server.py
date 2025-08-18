@@ -15,13 +15,20 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+# Load environment variables from the project root .env file
+project_root = Path(__file__).resolve().parent.parent.parent.parent
+dotenv_path = project_root / ".env"
+load_dotenv(dotenv_path, override=True)
 
 # Import our PydanticAI agents
 from .document_agent import DocumentAgent
@@ -76,8 +83,13 @@ async def fetch_credentials_from_server():
                         "ARCHON_SERVER_PORT environment variable is required. "
                         "Please set it in your .env file or environment."
                     )
+                
+                # Determine server host based on environment
+                is_docker = os.getenv("DOCKER_ENV", "false").lower() == "true"
+                server_host = "archon-server" if is_docker else "localhost"
+                
                 response = await client.get(
-                    f"http://archon-server:{server_port}/internal/credentials/agents", timeout=10.0
+                    f"http://{server_host}:{server_port}/internal/credentials/agents", timeout=10.0
                 )
                 response.raise_for_status()
                 credentials = response.json()
@@ -174,10 +186,14 @@ async def run_agent(request: AgentRequest):
         agent = app.state.agents[request.agent_type]
 
         # Prepare dependencies for the agent
+        is_docker = os.getenv("DOCKER_ENV", "false").lower() == "true"
+        mcp_host = "archon-mcp" if is_docker else "localhost"
+        mcp_port = os.getenv("ARCHON_MCP_PORT", "8051")
+        
         deps = {
             "context": request.context or {},
             "options": request.options or {},
-            "mcp_endpoint": os.getenv("MCP_SERVICE_URL", "http://archon-mcp:8051"),
+            "mcp_endpoint": os.getenv("MCP_SERVICE_URL", f"http://{mcp_host}:{mcp_port}"),
         }
 
         # Run the agent
@@ -295,7 +311,7 @@ if __name__ == "__main__":
     port = int(agents_port)
 
     uvicorn.run(
-        "server:app",
+        "src.agents.server:app",
         host="0.0.0.0",
         port=port,
         log_level="info",

@@ -9,6 +9,7 @@ Handles:
 """
 
 import asyncio
+import os
 import time
 from collections import deque
 from datetime import datetime
@@ -18,6 +19,7 @@ import docker
 from docker.errors import APIError, NotFound
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
+import httpx
 
 # Import unified logging
 from ..config.logfire_config import api_logger, mcp_logger, safe_set_attribute, safe_span
@@ -46,7 +48,7 @@ class LogEntry(BaseModel):
 
 
 class MCPServerManager:
-    """Manages the MCP Docker container lifecycle."""
+    """Manages the MCP server lifecycle (Docker or local)."""
 
     def __init__(self):
         self.container_name = "Archon-MCP"  # Container name from docker-compose.yml
@@ -60,7 +62,18 @@ class MCPServerManager:
         self._operation_lock = asyncio.Lock()  # Prevent concurrent start/stop operations
         self._last_operation_time = 0
         self._min_operation_interval = 2.0  # Minimum 2 seconds between operations
-        self._initialize_docker_client()
+        self.is_docker_env = os.getenv("DOCKER_ENV", "false").lower() == "true"
+        self.mcp_port = int(os.getenv("ARCHON_MCP_PORT", "8051"))
+        self._initialize_manager()
+
+    def _initialize_manager(self):
+        """Initialize manager based on environment (Docker or local)."""
+        if self.is_docker_env:
+            self._initialize_docker_client()
+        else:
+            mcp_logger.info("Running in local mode (non-Docker)")
+            # Check if MCP server is running locally
+            self._check_local_mcp_status()
 
     def _initialize_docker_client(self):
         """Initialize Docker client and get container reference."""
@@ -76,8 +89,37 @@ class MCPServerManager:
             mcp_logger.error(f"Failed to initialize Docker client: {str(e)}")
             self.docker_client = None
 
+    def _check_local_mcp_status(self):
+        """Check if MCP server is running locally."""
+        try:
+            with httpx.Client() as client:
+                # Try to connect to MCP server
+                response = client.get(f"http://localhost:{self.mcp_port}/mcp", timeout=1.0)
+                if response.status_code in [200, 404]:  # Server is responding
+                    self.status = "running"
+                    if not self.start_time:
+                        self.start_time = time.time()
+                    mcp_logger.info(f"MCP server detected running on port {self.mcp_port}")
+                else:
+                    self.status = "stopped"
+        except Exception:
+            self.status = "stopped"
+            mcp_logger.info("MCP server not detected locally")
+
     def _get_container_status(self) -> str:
-        """Get the current status of the MCP container."""
+        """Get the current status of the MCP server."""
+        # For local mode, check if server is running
+        if not self.is_docker_env:
+            try:
+                with httpx.Client() as client:
+                    response = client.get(f"http://localhost:{self.mcp_port}/mcp", timeout=1.0)
+                    if response.status_code in [200, 404]:  # Server is responding
+                        return "running"
+            except Exception:
+                pass
+            return "stopped"
+        
+        # Docker mode
         if not self.docker_client:
             return "docker_unavailable"
 
@@ -117,7 +159,7 @@ class MCPServerManager:
         mcp_logger.info(f"Started log reader for already-running container: {self.container_name}")
 
     async def start_server(self) -> dict[str, Any]:
-        """Start the MCP Docker container."""
+        """Start the MCP server."""
         async with self._operation_lock:
             # Check throttling
             current_time = time.time()
@@ -135,6 +177,23 @@ class MCPServerManager:
         with safe_span("mcp_server_start") as span:
             safe_set_attribute(span, "action", "start_server")
 
+            # For local mode, just check if server is running
+            if not self.is_docker_env:
+                self._check_local_mcp_status()
+                if self.status == "running":
+                    return {
+                        "success": True,
+                        "status": "running",
+                        "message": "MCP server is already running locally",
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "status": "stopped",
+                        "message": "MCP server is not running. Please start it manually with: uv run python -m src.mcp.mcp_server",
+                    }
+
+            # Docker mode
             if not self.docker_client:
                 mcp_logger.error("Docker client not available")
                 return {
@@ -238,7 +297,7 @@ class MCPServerManager:
                 }
 
     async def stop_server(self) -> dict[str, Any]:
-        """Stop the MCP Docker container."""
+        """Stop the MCP server."""
         async with self._operation_lock:
             # Check throttling
             current_time = time.time()
@@ -256,6 +315,23 @@ class MCPServerManager:
         with safe_span("mcp_server_stop") as span:
             safe_set_attribute(span, "action", "stop_server")
 
+            # For local mode, can't stop the server from here
+            if not self.is_docker_env:
+                self._check_local_mcp_status()
+                if self.status == "stopped":
+                    return {
+                        "success": True,
+                        "status": "stopped",
+                        "message": "MCP server is not running",
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "status": "running",
+                        "message": "MCP server is running locally. Stop it manually if needed.",
+                    }
+
+            # Docker mode
             if not self.docker_client:
                 mcp_logger.error("Docker client not available")
                 return {
@@ -336,6 +412,22 @@ class MCPServerManager:
 
     def get_status(self) -> dict[str, Any]:
         """Get the current server status."""
+        # For local mode, check if server is running
+        if not self.is_docker_env:
+            self._check_local_mcp_status()
+            uptime = None
+            if self.status == "running" and self.start_time:
+                uptime = int(time.time() - self.start_time)
+            
+            return {
+                "status": self.status,
+                "uptime": uptime,
+                "logs": list(self.logs),
+                "is_docker": False,
+                "port": self.mcp_port,
+            }
+        
+        # Docker mode
         # Update status based on actual container state
         container_status = self._get_container_status()
 

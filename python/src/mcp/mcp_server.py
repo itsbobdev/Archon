@@ -36,7 +36,7 @@ from mcp.server.fastmcp import Context, FastMCP
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Load environment variables from the project root .env file
-project_root = Path(__file__).resolve().parent.parent
+project_root = Path(__file__).resolve().parent.parent.parent.parent
 dotenv_path = project_root / ".env"
 load_dotenv(dotenv_path, override=True)
 
@@ -195,7 +195,6 @@ try:
 
     mcp = FastMCP(
         "archon-mcp-server",
-        description="MCP server for Archon - uses HTTP calls to other services",
         lifespan=lifespan,
         host=server_host,
         port=server_port,
@@ -361,7 +360,7 @@ def main():
         mcp_logger.info("🔥 Logfire initialized for MCP server")
         mcp_logger.info(f"🌟 Starting MCP server - host={server_host}, port={server_port}")
 
-        mcp.run(transport="streamable-http")
+        mcp.run(transport="sse")
 
     except Exception as e:
         mcp_logger.error(f"💥 Fatal error in main - error={str(e)}, error_type={type(e).__name__}")

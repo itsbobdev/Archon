@@ -15,7 +15,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   // Get host and port from environment variables or use defaults
   // For internal Docker communication, use the service name
   // For external access, use the HOST from environment
-  const isDocker = process.env.DOCKER_ENV === 'true' || !!process.env.HOSTNAME;
+  const isDocker = process.env.DOCKER_ENV === 'true';
   const internalHost = 'archon-server';  // Docker service name for internal communication
   const externalHost = process.env.HOST || 'localhost';  // Host for external access
   const host = isDocker ? internalHost : externalHost;
