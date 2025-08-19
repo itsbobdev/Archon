@@ -134,6 +134,14 @@ async def lifespan(app: FastAPI):
         # MCP Client functionality removed from architecture
         # Agents now use MCP tools directly
 
+        # Start MCP log monitoring if in local mode
+        try:
+            from .api_routes.mcp_api import mcp_manager
+            await mcp_manager.start_log_monitoring()
+            api_logger.info("✅ MCP log monitoring initialized")
+        except Exception as e:
+            api_logger.warning(f"Could not start MCP log monitoring: {e}")
+
         # Mark initialization as complete
         _initialization_complete = True
         api_logger.info("🎉 Archon backend started successfully!")

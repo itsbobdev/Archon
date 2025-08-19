@@ -74,6 +74,16 @@ class MCPServerManager:
             mcp_logger.info("Running in local mode (non-Docker)")
             # Check if MCP server is running locally
             self._check_local_mcp_status()
+            # Log monitoring will be started during app startup
+            
+    async def start_log_monitoring(self):
+        """Start log file monitoring for local mode. Must be called after event loop is running."""
+        if not self.is_docker_env:
+            # Force status check since we want to monitor logs regardless
+            self._check_local_mcp_status()
+            if self.log_reader_task is None:
+                self.log_reader_task = asyncio.create_task(self._read_local_log_file())
+                mcp_logger.info("Started log file monitoring for local mode")
 
     def _initialize_docker_client(self):
         """Initialize Docker client and get container reference."""
@@ -139,6 +149,75 @@ class MCPServerManager:
     def _is_log_reader_active(self) -> bool:
         """Check if the log reader task is active."""
         return self.log_reader_task is not None and not self.log_reader_task.done()
+
+    async def _read_local_log_file(self):
+        """Read logs from local MCP server log file."""
+        import aiofiles
+        from pathlib import Path
+        
+        # Determine log file path
+        log_file = Path("logs/mcp-server.log")
+        if not log_file.exists():
+            # Try from python directory
+            log_file = Path("../logs/mcp-server.log")
+        
+        if not log_file.exists():
+            mcp_logger.warning(f"MCP log file not found at {log_file}")
+            return
+            
+        mcp_logger.info(f"Starting to monitor MCP log file: {log_file}")
+        
+        try:
+            # Read existing logs first (last 100 lines)
+            async with aiofiles.open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = await f.readlines()
+                # Process last 100 lines
+                for line in lines[-100:]:
+                    line = line.strip()
+                    if line:
+                        level, message = self._parse_log_line(line)
+                        # Add to logs without broadcasting (initial load)
+                        log_entry = {
+                            "timestamp": datetime.utcnow().isoformat() + "Z",
+                            "level": level,
+                            "message": message,
+                        }
+                        self.logs.append(log_entry)
+            
+            # Now tail the file for new entries
+            last_position = log_file.stat().st_size
+            
+            while self.status == "running":
+                try:
+                    current_size = log_file.stat().st_size
+                    
+                    if current_size > last_position:
+                        # New content added
+                        async with aiofiles.open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            await f.seek(last_position)
+                            new_lines = await f.readlines()
+                            
+                            for line in new_lines:
+                                line = line.strip()
+                                if line:
+                                    level, message = self._parse_log_line(line)
+                                    # Add and broadcast new log entries
+                                    self._add_log(level, message)
+                            
+                            last_position = current_size
+                    elif current_size < last_position:
+                        # File was truncated/rotated
+                        last_position = 0
+                    
+                    # Check every 0.5 seconds for new logs
+                    await asyncio.sleep(0.5)
+                    
+                except Exception as e:
+                    mcp_logger.error(f"Error reading log file: {e}")
+                    await asyncio.sleep(1)
+                    
+        except Exception as e:
+            mcp_logger.error(f"Failed to start log file monitoring: {e}")
 
     async def _ensure_log_reader_running(self):
         """Ensure the log reader task is running if container is active."""
@@ -563,7 +642,24 @@ class MCPServerManager:
         if not line:
             return "INFO", ""
 
-        # Try to extract log level from common formats
+        # Handle MCP server log format: "timestamp - logger - LEVEL - message"
+        parts = line.split(" - ", 3)  # Split into max 4 parts
+        if len(parts) >= 3:
+            # Check if third part is a log level
+            potential_level = parts[2].strip().upper()
+            if potential_level in ["INFO", "DEBUG", "WARNING", "ERROR", "CRITICAL"]:
+                message = parts[3] if len(parts) > 3 else ""
+                return potential_level, message.strip()
+
+        # Handle pipe-separated format: "timestamp | logger | LEVEL | message"  
+        parts = line.split(" | ", 3)
+        if len(parts) >= 3:
+            potential_level = parts[2].strip().upper()
+            if potential_level in ["INFO", "DEBUG", "WARNING", "ERROR", "CRITICAL"]:
+                message = parts[3] if len(parts) > 3 else ""
+                return potential_level, message.strip()
+
+        # Handle bracket format: "[LEVEL] message"
         if line.startswith("[") and "]" in line:
             end_bracket = line.find("]")
             potential_level = line[1:end_bracket].upper()
