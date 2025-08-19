@@ -727,11 +727,16 @@ async def get_mcp_config():
 
             mcp_port = int(os.getenv("ARCHON_MCP_PORT", "8051"))
 
-            # Configuration for SSE-only mode with actual port
+            # Configuration with dual transport support
             config = {
                 "host": "localhost",
                 "port": mcp_port,
-                "transport": "sse",
+                "transport": "sse",  # Primary transport
+                "http_transport": "http",  # Additional HTTP JSON-RPC support
+                "endpoints": {
+                    "sse": f"http://localhost:{mcp_port}/sse",
+                    "http": f"http://localhost:{mcp_port}/mcp"
+                }
             }
 
             # Get only model choice from database
@@ -762,7 +767,7 @@ async def get_mcp_config():
                 config["use_agentic_rag"] = False
                 config["use_reranking"] = False
 
-            api_logger.info("MCP configuration (SSE-only mode)")
+            api_logger.info("MCP configuration (SSE + HTTP JSON-RPC mode)")
             safe_set_attribute(span, "host", config["host"])
             safe_set_attribute(span, "port", config["port"])
             safe_set_attribute(span, "transport", "sse")

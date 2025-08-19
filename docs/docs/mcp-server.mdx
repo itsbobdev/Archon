@@ -97,7 +97,7 @@ archon-mcp:
 
 ## Client Configuration
 
-Archon MCP server uses **SSE (Server-Sent Events) transport only**.
+Archon MCP server supports **both HTTP JSON-RPC and SSE (Server-Sent Events) transport**.
 
 ### Cursor IDE
 
@@ -115,6 +115,12 @@ Add to MCP settings:
 
 ### Claude Code
 
+**HTTP JSON-RPC (Recommended):**
+```bash
+claude mcp add --transport http archon http://localhost:8051/mcp
+```
+
+**SSE Transport:**
 ```bash
 claude mcp add --transport sse archon http://localhost:8051/sse
 ```

@@ -14,6 +14,17 @@ Modules:
 import asyncio
 import logging
 import os
+import sys
+
+# CRITICAL: Set Windows event loop policy FIRST to fix Playwright/Crawl4AI issues
+if sys.platform.startswith('win'):
+    # Force Windows to use ProactorEventLoop for proper subprocess handling
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    # Set environment variables for Playwright/Crawl4AI Windows compatibility
+    # Point to the system-installed Playwright browsers
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = r'C:\Users\backup\AppData\Local\ms-playwright'
+    os.environ['PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD'] = '0'  # Allow browser download
+    os.environ['PLAYWRIGHT_DRIVER_PATH'] = ''  # Use system default
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -89,14 +100,9 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Credentials initialized")
         api_logger.info("🔥 Logfire initialized for backend")
 
-        # Initialize crawling context
-        try:
-            await initialize_crawler()
-        except Exception as e:
-            api_logger.warning(f"Could not fully initialize crawling context: {str(e)}")
-
-        # Make crawling context available to modules
-        # Crawler is now managed by CrawlerManager
+        # Crawler will be lazily initialized when needed
+        # This avoids Windows subprocess issues during startup
+        api_logger.info("✅ Crawler will be initialized on first use")
 
         # Initialize Socket.IO services
         try:

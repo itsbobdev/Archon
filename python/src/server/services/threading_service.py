@@ -97,9 +97,7 @@ class RateLimiter:
                 wait_time = self._calculate_wait_time(estimated_tokens)
                 if wait_time > 0:
                     logfire_logger.info(
-                        f"Rate limiting: waiting {wait_time:.1f}s",
-                        tokens=estimated_tokens,
-                        current_usage=self._get_current_usage(),
+                        f"Rate limiting: waiting {wait_time:.1f}s - tokens={estimated_tokens}, current_usage={self._get_current_usage()}"
                     )
                     await asyncio.sleep(wait_time)
                     return await self.acquire(estimated_tokens)
@@ -510,7 +508,7 @@ class ThreadingService:
             finally:
                 duration = time.time() - start_time
                 logfire_logger.debug(
-                    "Rate limited operation completed", duration=duration, tokens=estimated_tokens
+                    f"Rate limited operation completed - duration={duration:.2f}s, tokens={estimated_tokens}"
                 )
 
     async def run_cpu_intensive(self, func: Callable, *args, **kwargs) -> Any:

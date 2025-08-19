@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from fastapi import Request, HTTPException
+from fastapi.responses import JSONResponse
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -338,9 +340,154 @@ def register_modules():
         raise RuntimeError("No MCP modules available")
 
 
+# HTTP JSON-RPC endpoint for standard MCP transport
+@mcp.custom_route("/mcp", ["POST"])
+async def mcp_http_endpoint(request: Request) -> JSONResponse:
+    """
+    HTTP JSON-RPC 2.0 endpoint for MCP tools.
+    
+    This provides standard MCP HTTP transport support alongside SSE.
+    """
+    try:
+        # Parse JSON-RPC request
+        body = await request.json()
+        logger.info(f"HTTP MCP request: {body}")
+        
+        # Validate JSON-RPC structure
+        if not isinstance(body, dict):
+            raise HTTPException(400, "Request must be JSON object")
+            
+        if body.get("jsonrpc") != "2.0":
+            raise HTTPException(400, "Must be JSON-RPC 2.0")
+            
+        method = body.get("method")
+        if not method:
+            raise HTTPException(400, "Missing 'method' field")
+            
+        request_id = body.get("id")
+        params = body.get("params", {})
+        
+        # Get the tool from FastMCP's tool manager
+        if method not in mcp._tool_manager._tools:
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32601,
+                    "message": f"Method not found: {method}",
+                    "data": {"available_methods": list(mcp._tool_manager._tools.keys())}
+                }
+            })
+        
+        tool_handler = mcp._tool_manager._tools[method]
+        
+        # Create a mock context for the tool call
+        class MockContext:
+            def __init__(self):
+                self.request_context = type('RequestContext', (), {
+                    'lifespan_context': _shared_context
+                })()
+        
+        mock_ctx = MockContext()
+        
+        # Execute the tool with parameters
+        try:
+            if params:
+                # Call with named parameters
+                result = await tool_handler.fn(mock_ctx, **params)
+            else:
+                # Call with context only
+                result = await tool_handler.fn(mock_ctx)
+                
+            # Return successful JSON-RPC response
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": json.loads(result) if isinstance(result, str) else result
+            })
+            
+        except TypeError as te:
+            # Parameter mismatch
+            return JSONResponse({
+                "jsonrpc": "2.0", 
+                "id": request_id,
+                "error": {
+                    "code": -32602,
+                    "message": f"Invalid params for {method}: {str(te)}",
+                    "data": {"method": method, "params": params}
+                }
+            })
+            
+        except Exception as tool_error:
+            # Tool execution error
+            logger.error(f"Tool {method} execution error: {tool_error}")
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": request_id, 
+                "error": {
+                    "code": -32000,
+                    "message": f"Tool execution failed: {str(tool_error)}",
+                    "data": {"method": method, "error_type": type(tool_error).__name__}
+                }
+            })
+            
+    except json.JSONDecodeError:
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {
+                "code": -32700,
+                "message": "Parse error: Invalid JSON"
+            }
+        })
+        
+    except HTTPException as he:
+        return JSONResponse({
+            "jsonrpc": "2.0", 
+            "id": body.get("id") if 'body' in locals() else None,
+            "error": {
+                "code": -32600,
+                "message": he.detail
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"HTTP MCP endpoint error: {e}")
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": body.get("id") if 'body' in locals() else None,
+            "error": {
+                "code": -32603,
+                "message": f"Internal error: {str(e)}"
+            }
+        })
+
+
+# Add CORS and health endpoint for HTTP transport  
+@mcp.custom_route("/mcp", ["GET"])
+async def mcp_http_info(request: Request) -> JSONResponse:
+    """
+    GET endpoint for MCP HTTP transport info and health check.
+    """
+    return JSONResponse({
+        "name": "archon-mcp-server",
+        "description": "Archon MCP server with HTTP and SSE transport support",
+        "version": "1.0.0",
+        "transports": ["http", "sse"],
+        "endpoints": {
+            "http": "/mcp",
+            "sse": "/sse"
+        },
+        "tools": list(mcp._tool_manager._tools.keys()),
+        "status": "ready"
+    })
+
+
 # Register all modules when this file is imported
 try:
     register_modules()
+    logger.info("✓ HTTP JSON-RPC endpoints added via decorators")
+    
 except Exception as e:
     logger.error(f"💥 Critical error during module registration: {e}")
     logger.error(traceback.format_exc())
@@ -354,8 +501,9 @@ def main():
         setup_logfire(service_name="archon-mcp-server")
 
         logger.info("🚀 Starting Archon MCP Server")
-        logger.info("   Mode: Streamable HTTP")
-        logger.info(f"   URL: http://{server_host}:{server_port}/mcp")
+        logger.info("   Mode: SSE + HTTP JSON-RPC")
+        logger.info(f"   SSE URL: http://{server_host}:{server_port}/sse")
+        logger.info(f"   HTTP URL: http://{server_host}:{server_port}/mcp")
 
         mcp_logger.info("🔥 Logfire initialized for MCP server")
         mcp_logger.info(f"🌟 Starting MCP server - host={server_host}, port={server_port}")

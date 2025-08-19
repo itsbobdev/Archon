@@ -197,7 +197,7 @@ Archon uses true microservices architecture with clear separation of concerns:
 
 - **HTTP-based**: All inter-service communication uses HTTP APIs
 - **Socket.IO**: Real-time updates from Server to Frontend  
-- **MCP Protocol**: AI clients connect to MCP Server via SSE or stdio
+- **MCP Protocol**: AI clients connect to MCP Server via HTTP JSON-RPC, SSE, or stdio
 - **No Direct Imports**: Services are truly independent with no shared code dependencies
 
 ### Key Architectural Benefits

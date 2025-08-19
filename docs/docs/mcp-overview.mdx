@@ -172,7 +172,12 @@ Connect your AI client to Archon's knowledge base:
 }
 ```
 
-**For Claude Code:**
+**For Claude Code (HTTP JSON-RPC):**
+```bash
+claude mcp add --transport http archon http://localhost:8051/mcp
+```
+
+**For Claude Code (SSE):**
 ```bash
 claude mcp add --transport sse archon http://localhost:8051/sse
 ```
