@@ -332,6 +332,19 @@ def register_modules():
             logger.error(traceback.format_exc())
     else:
         logger.info("⚠ Project module skipped - Projects are disabled")
+    
+    # Import and register Learning Capture module
+    try:
+        from src.mcp.modules.learning_capture_module import register_learning_capture_tools
+        
+        register_learning_capture_tools(mcp)
+        modules_registered += 1
+        logger.info("✓ Learning Capture module registered")
+    except ImportError as e:
+        logger.warning(f"⚠ Learning Capture module not available: {e}")
+    except Exception as e:
+        logger.error(f"✗ Error registering Learning Capture module: {e}")
+        logger.error(traceback.format_exc())
 
     logger.info(f"📦 Total modules registered: {modules_registered}")
 
@@ -464,6 +477,18 @@ async def mcp_http_endpoint(request: Request) -> JSONResponse:
 
 
 # Add CORS and health endpoint for HTTP transport  
+@mcp.custom_route("/health", ["GET"])
+async def health_endpoint(request: Request) -> JSONResponse:
+    """
+    Simple health check endpoint for startup scripts and monitoring.
+    """
+    return JSONResponse({
+        "status": "healthy",
+        "service": "archon-mcp-server",
+        "timestamp": datetime.now().isoformat(),
+        "ready": _initialization_complete
+    })
+
 @mcp.custom_route("/mcp", ["GET"])
 async def mcp_http_info(request: Request) -> JSONResponse:
     """
@@ -476,7 +501,8 @@ async def mcp_http_info(request: Request) -> JSONResponse:
         "transports": ["http", "sse"],
         "endpoints": {
             "http": "/mcp",
-            "sse": "/sse"
+            "sse": "/sse",
+            "health": "/health"
         },
         "tools": list(mcp._tool_manager._tools.keys()),
         "status": "ready"
